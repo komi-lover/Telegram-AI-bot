@@ -54,8 +54,12 @@ export default {
     } catch (error) {
       console.error(error);
       if (adminChatId) {
-        const errorMsg = `🚨 *Bot Error Alert*\n\n*Message:* ${error.message}\n*Stack:* \`${error.stack?.substring(0, 500)}\``;
-        await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, adminChatId, errorMsg);
+        try {
+          const errorMsg = `🚨 *Bot Error Alert*\n\n*Message:* ${error.message}\n*Stack:* \`${error.stack?.substring(0, 500)}\``;
+          await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, adminChatId, errorMsg);
+        } catch (alertError) {
+           console.error("Could not send alert to admin:", alertError);
+        }
       }
       // Always return 200 to Telegram so it doesn't get stuck in a retry loop
       return new Response('OK', { status: 200 });
@@ -182,7 +186,8 @@ async function handleMessage(msg, env, ctx) {
     await sendTelegramMessage(botToken, chatId, "⏳ *Context limit reached. Summarizing previous history to save memory...*");
     const summary = await summarizeConversation(env.GEMINI_API_KEY, history);
     
-    history = [{ role: 'model', parts: [{ text: `[SYSTEM SUMMARY OF PREVIOUS CHAT]: ${summary}` }] }];
+    // CRITICAL FIX: Gemini requires the first message to ALWAYS be from the 'user', not 'model'
+    history = [{ role: 'user', parts: [{ text: `[SYSTEM SUMMARY OF PREVIOUS CHAT]: ${summary}` }] }];
     user.summary_count++;
     
     await env.DB.prepare("UPDATE users SET summary_count = ? WHERE id = ?").bind(user.summary_count, chatId).run();
@@ -248,9 +253,9 @@ async function handleCallback(callbackQuery, env) {
 }
 
 async function callGeminiAPI(apiKey, history, personality) {
+  // CRITICAL FIX: Changed from gemini-2.5-flash to gemini-1.5-flash to prevent 404 API rejections
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-
-
+  
   const payload = {
     contents: history,
     systemInstruction: {
@@ -363,7 +368,7 @@ async function sendDeployInstructions(botToken, chatId) {
 
 *Step 2: Setup Cloudflare*
 • Install Wrangler: \`npm i -g wrangler\`
-• Create D1 Database: \`wrangler d1 create telegram_ai_bot_db\`
+• Create D1 Database: \`wrangler d1 create bot_db\`
 • Create a new folder, add this code to \`worker.js\`.
 • Setup \`wrangler.toml\` pointing to your worker and D1 DB binding.
 
