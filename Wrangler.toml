@@ -1,0 +1,36 @@
+name = "telegram-gemini-bot"
+
+
+main = "worker.js"
+
+
+compatibility_date = "2024-03-20"
+
+
+​This is REQUIRED for the bot to save user history and settings.
+
+
+​Users cloning this repo MUST create a D1 database and update the database_id below.
+
+
+​[[d1_databases]]
+
+
+binding = "DB"
+
+
+database_name = "bot_db"
+
+
+database_id = "REPLACE_WITH_YOUR_D1_ID"
+
+
+​Note: Environment variables like TELEGRAM_BOT_TOKEN and GEMINI_API_KEY
+
+
+​should NEVER be placed here in plain text.
+
+
+​They must be added as encrypted Secrets via Wrangler or the Cloudflare Dashboard.
+
+
