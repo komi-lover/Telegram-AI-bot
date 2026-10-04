@@ -68,21 +68,6 @@ export default {
 };
 
 async function initializeDatabase(db) {
-  const setupSql = `
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY,
-      personality TEXT DEFAULT '',
-      files_today INTEGER DEFAULT 0,
-      last_file_date TEXT DEFAULT '',
-      summary_count INTEGER DEFAULT 0,
-      last_active INTEGER DEFAULT 0,
-      state TEXT DEFAULT 'chatting'
-    );
-    CREATE TABLE IF NOT EXISTS history (
-      user_id INTEGER PRIMARY KEY,
-      messages TEXT DEFAULT '[]'
-    );
-  `;
   // Cloudflare D1 batch execution
   await db.batch([
     db.prepare(`CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, personality TEXT DEFAULT '', files_today INTEGER DEFAULT 0, last_file_date TEXT DEFAULT '', summary_count INTEGER DEFAULT 0, last_active INTEGER DEFAULT 0, state TEXT DEFAULT 'chatting')`),
@@ -156,7 +141,7 @@ async function handleMessage(msg, env, ctx) {
 
     const fileMeta = getFileMetadata(msg);
     if (fileMeta.size > CONFIG.MAX_FILE_SIZE) {
-      await sendTelegramMessage(botToken, chatId, `⚠️ *File too large!* Limit is 5MB. Your file is ${(fileMeta.size / 1024 / 1024).toFixed(1)}MB.`);
+      await sendTelegramMessage(botToken, chatId, `⚠️️ *File too large!* Limit is 5MB. Your file is ${(fileMeta.size / 1024 / 1024).toFixed(1)}MB.`);
       return;
     }
 
@@ -206,7 +191,18 @@ async function handleMessage(msg, env, ctx) {
     body: JSON.stringify({ chat_id: chatId, action: 'typing' })
   });
 
-  const aiReplyText = await callGeminiAPI(env.GEMINI_API_KEY, history, user.personality);
+  let aiReplyText;
+  try {
+    aiReplyText = await callGeminiAPI(env.GEMINI_API_KEY, history, user.personality);
+  } catch (apiError) {
+    // If the API fails, print the error directly in the Telegram chat interface
+    await sendTelegramMessage(botToken, chatId, `🛑 *AI Request Failed*\n\n\`${apiError.message}\`\n\n_If this says "fetch failed" or "Invalid URL", check your Gemini API key in Cloudflare for accidental spaces!_`);
+    
+    // Remove the failed user message from history so they can try again
+    history.pop(); 
+    await env.DB.prepare("INSERT OR REPLACE INTO history (user_id, messages) VALUES (?, ?)").bind(chatId, JSON.stringify(history)).run();
+    return;
+  }
   
   // Format reply (Add warning if summarized too much)
   let finalReply = aiReplyText;
@@ -253,8 +249,14 @@ async function handleCallback(callbackQuery, env) {
 }
 
 async function callGeminiAPI(apiKey, history, personality) {
-  // CRITICAL FIX: Changed from gemini-2.5-flash to gemini-1.5-flash to prevent 404 API rejections
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  // CRITICAL FIX: Trim the API key to remove accidental line breaks or spaces from copy-pasting
+  const cleanKey = (apiKey || "").trim();
+  
+  if (!cleanKey) {
+    throw new Error("API Key is missing or empty.");
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanKey}`;
   
   const payload = {
     contents: history,
@@ -272,7 +274,7 @@ async function callGeminiAPI(apiKey, history, personality) {
 
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Gemini API Error: ${response.status} - ${errText}`);
+    throw new Error(`Google API Rejected Request: ${response.status} - ${errText}`);
   }
 
   const data = await response.json();
