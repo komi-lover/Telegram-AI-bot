@@ -2,11 +2,13 @@
 A general purpose program Optimized to run on cloudflare workers. This bot is compatible with most AI APIs, whether they're multimedia or text-only. This program is made to run a telegram bot
 How to clone and deploy this bot:
 
-*Step 1: Get API Keys*
+*Step 1: Get API Keys and the code*
 • Get a Telegram Token from @BotFather.
 • Get a Free Gemini Key from Google AI Studio.
+•Clone the project in github
 
 *Step 2: Setup Cloudflare*
+•Make a Worker in Cloudflare, connecting it to the clone you made
 • Install Wrangler: \`npm i -g wrangler\`
 • Create D1 Database: \`wrangler d1 create telegram_ai_bot_db\`
 • Create a new folder, add this code to \`worker.js\`.
