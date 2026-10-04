@@ -1,5 +1,6 @@
-name = "telegram-gemini-bot"
+name = "telegram-ai-bot"
 main = "worker.js"
 compatibility_date = "2024-03-20"
+[[d1_databases]]
 binding = "DB"
 database_name = "bot_db"
