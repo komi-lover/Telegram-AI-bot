@@ -1,4 +1,3 @@
-Javascript 
 /**
  * CLOUDFLARE WORKER: TELEGRAM AI BOT (GEMINI NATIVE)
  * Zero-Cost Architecture | Auto-Summarization | State Management
