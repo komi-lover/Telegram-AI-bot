@@ -256,7 +256,7 @@ async function callGeminiAPI(apiKey, history, personality) {
     throw new Error("API Key is missing or empty.");
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${cleanKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${cleanKey}`;
   
   const payload = {
     contents: history,
