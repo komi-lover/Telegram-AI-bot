@@ -4,3 +4,4 @@ compatibility_date = "2024-03-20"
 [[d1_databases]]
 binding = "DB"
 database_name = "bot_db"
+database_id = "b9396573-4cfc-4b68-b552-6ca96e2af6ae"
