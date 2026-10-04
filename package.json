@@ -1,0 +1,13 @@
+{
+"name": "telegram-gemini-bot",
+"version": "1.0.0",
+"description": "A zero-cost Telegram AI bot using Cloudflare Workers and Google Gemini API.",
+"main": "worker.js",
+"scripts": {
+"deploy": "wrangler deploy"
+},
+"devDependencies": {
+"wrangler": "^3.0.0"
+},
+"type": "module"
+}
