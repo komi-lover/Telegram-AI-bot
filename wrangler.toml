@@ -20,4 +20,8 @@ persist = true
 [observability.issue_detection]
 enabled = true
 # ...
-
+{
+  // ...
+  "vars": {},
+  // ...
+}
