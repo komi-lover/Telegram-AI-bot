@@ -1,22 +1,22 @@
 /**
  * CLOUDFLARE WORKER: TELEGRAM AI BOT (GEMINI NATIVE)
- * Zero-Cost Architecture | Auto-Summarization | State Management
+ * Zero-Cost Architecture | Auto-Summarization | State Management | API Rotation
  * 
  * PREREQUISITES:
  * 1. Cloudflare Account (Free)
  * 2. Telegram Bot Token (@BotFather)
- * 3. Google Gemini API Key (Google AI Studio)
+ * 3. Google Gemini API Keys (Google AI Studio)
  * 
  * ENVIRONMENT VARIABLES REQUIRED:
  * - TELEGRAM_BOT_TOKEN
- * - GEMINI_API_KEY
+ * - GEMINI_API_KEYS (Comma-separated list of keys for rotation)
  * - ADMIN_CHAT_ID (Your personal Telegram User ID for error logs)
  * - DB (Cloudflare D1 Database Binding)
  */
 
 const CONFIG = {
   MAX_FILE_SIZE: 5 * 1024 * 1024, // 5 MB
-  MAX_FILES_PER_DAY: 2,
+  MAX_FILES_PER_DAY: 8,
   MAX_HISTORY_TURNS: 10, // Start summarizing after 10 messages
   MAX_SUMMARY_COUNT: 5,  // Warn user after 5 summarizations
   IDLE_TIMEOUT_MS: 24 * 60 * 60 * 1000, // 24 Hours
@@ -79,6 +79,8 @@ async function handleMessage(msg, env, ctx) {
   const chatId = msg.chat.id;
   const text = msg.text || msg.caption || '';
   const botToken = env.TELEGRAM_BOT_TOKEN;
+  // Fallback to GEMINI_API_KEY if the user hasn't updated to GEMINI_API_KEYS yet
+  const apiKeys = env.GEMINI_API_KEYS || env.GEMINI_API_KEY;
   
   // Get or Create User
   let user = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(chatId).first();
@@ -135,13 +137,13 @@ async function handleMessage(msg, env, ctx) {
     }
 
     if (user.files_today >= CONFIG.MAX_FILES_PER_DAY) {
-      await sendTelegramMessage(botToken, chatId, "🚫 *Daily file limit reached!* You can send up to 2 files per day. Try again tomorrow.");
+      await sendTelegramMessage(botToken, chatId, `🚫 *Daily file limit reached!* You can send up to ${CONFIG.MAX_FILES_PER_DAY} files per day. Try again tomorrow.`);
       return;
     }
 
     const fileMeta = getFileMetadata(msg);
     if (fileMeta.size > CONFIG.MAX_FILE_SIZE) {
-      await sendTelegramMessage(botToken, chatId, `⚠️️ *File too large!* Limit is 5MB. Your file is ${(fileMeta.size / 1024 / 1024).toFixed(1)}MB.`);
+      await sendTelegramMessage(botToken, chatId, `⚠ *File too large!* Limit is 5MB. Your file is ${(fileMeta.size / 1024 / 1024).toFixed(1)}MB.`);
       return;
     }
 
@@ -169,9 +171,8 @@ async function handleMessage(msg, env, ctx) {
   // Check if we need to auto-summarize
   if (history.length > CONFIG.MAX_HISTORY_TURNS) {
     await sendTelegramMessage(botToken, chatId, "⏳ *Context limit reached. Summarizing previous history to save memory...*");
-    const summary = await summarizeConversation(env.GEMINI_API_KEY, history);
+    const summary = await summarizeConversation(apiKeys, history);
     
-    // CRITICAL FIX: Gemini requires the first message to ALWAYS be from the 'user', not 'model'
     history = [{ role: 'user', parts: [{ text: `[SYSTEM SUMMARY OF PREVIOUS CHAT]: ${summary}` }] }];
     user.summary_count++;
     
@@ -193,10 +194,10 @@ async function handleMessage(msg, env, ctx) {
 
   let aiReplyText;
   try {
-    aiReplyText = await callGeminiAPI(env.GEMINI_API_KEY, history, user.personality);
+    aiReplyText = await callGeminiAPI(apiKeys, history, user.personality);
   } catch (apiError) {
-    // If the API fails, print the error directly in the Telegram chat interface
-    await sendTelegramMessage(botToken, chatId, `🛑 *AI Request Failed*\n\n\`${apiError.message}\`\n\n_If this says "fetch failed" or "Invalid URL", check your Gemini API key in Cloudflare for accidental spaces!_`);
+    // If all APIs fail, print the error directly in the Telegram chat interface
+    await sendTelegramMessage(botToken, chatId, `🛑 *AI Request Failed*\n\n\`${apiError.message}\`\n\n_If you provided multiple keys, it means all of them were rate-limited or invalid._`);
     
     // Remove the failed user message from history so they can try again
     history.pop(); 
@@ -207,7 +208,7 @@ async function handleMessage(msg, env, ctx) {
   // Format reply (Add warning if summarized too much)
   let finalReply = aiReplyText;
   if (user.summary_count > CONFIG.MAX_SUMMARY_COUNT) {
-    finalReply += "\n\n⚠️ *System Note:* This chat has been summarized many times and may start losing specific details. Tap Menu -> Start New to reset context.";
+    finalReply += "\n\n⚠ *System Note:* This chat has been summarized many times and may start losing specific details. Tap Menu -> Start New to reset context.";
   }
 
   // Append AI reply to history
@@ -248,15 +249,17 @@ async function handleCallback(callbackQuery, env) {
   }
 }
 
-async function callGeminiAPI(apiKey, history, personality) {
-  // CRITICAL FIX: Trim the API key to remove accidental line breaks or spaces from copy-pasting
-  const cleanKey = (apiKey || "").trim();
+async function callGeminiAPI(apiKeysString, history, personality) {
+  const rawKeys = apiKeysString || "";
+  // Split by comma, trim spaces, and filter out any accidental empty strings
+  const keys = rawKeys.split(',').map(k => k.trim()).filter(k => k.length > 0);
   
-  if (!cleanKey) {
-    throw new Error("API Key is missing or empty.");
+  if (keys.length === 0) {
+    throw new Error("No API Keys provided. Please set GEMINI_API_KEYS in your Cloudflare secrets.");
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${cleanKey}`;
+  // Updated to the newly requested Gemini 3.1 Flash-Lite model
+  const modelName = "gemini-3.1-flash-lite";
   
   const payload = {
     contents: history,
@@ -266,22 +269,40 @@ async function callGeminiAPI(apiKey, history, personality) {
     generationConfig: { maxOutputTokens: 2000 }
   };
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
+  let lastError = null;
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Google API Rejected Request: ${response.status} - ${errText}`);
+  // Rotation System: Iterate through available API keys until one succeeds
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${key}`;
+    
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Rejected Request (Key ${i + 1}/${keys.length}): ${response.status} - ${errText}`);
+      }
+
+      const data = await response.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || "Sorry, I generated an empty response.";
+      
+    } catch (error) {
+      console.warn(`API Key ${i + 1} failed:`, error.message);
+      lastError = error;
+      // The loop will continue, moving to the next key in the array automatically.
+    }
   }
 
-  const data = await response.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || "Sorry, I generated an empty response.";
+  // If the loop completely finishes without returning, it means every single key failed
+  throw new Error(`All ${keys.length} API keys failed. Last error: ${lastError.message}`);
 }
 
-async function summarizeConversation(apiKey, history) {
+async function summarizeConversation(apiKeysString, history) {
   // Strip out images/documents to save tokens during summarization
   const textOnlyHistory = history.map(turn => {
     return `${turn.role.toUpperCase()}: ${turn.parts.filter(p => p.text).map(p => p.text).join(' ')}`;
@@ -289,7 +310,7 @@ async function summarizeConversation(apiKey, history) {
 
   const prompt = `Please provide a concise, factual summary of the following conversation. Highlight key topics, facts discussed, and user preferences. \n\n${textOnlyHistory}`;
   
-  const summaryResult = await callGeminiAPI(apiKey, [{ role: 'user', parts: [{ text: prompt }] }], "You are a backend system summarizer.");
+  const summaryResult = await callGeminiAPI(apiKeysString, [{ role: 'user', parts: [{ text: prompt }] }], "You are a backend system summarizer.");
   return summaryResult;
 }
 
@@ -331,26 +352,23 @@ function getFileMetadata(msg) {
   if (msg.document) return { id: msg.document.file_id, size: msg.document.file_size, mime: msg.document.mime_type };
   if (msg.voice) return { id: msg.voice.file_id, size: msg.voice.file_size, mime: msg.voice.mime_type };
   if (msg.photo) {
-    const largestPhoto = msg.photo[msg.photo.length - 1]; // Last item is the largest resolution
+    const largestPhoto = msg.photo[msg.photo.length - 1];
     return { id: largestPhoto.file_id, size: largestPhoto.file_size, mime: 'image/jpeg' };
   }
   return { id: null, size: 0, mime: null };
 }
 
 async function downloadTelegramFileBase64(botToken, fileId) {
-  // 1. Get File Path
   const fileInfoRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
   const fileInfo = await fileInfoRes.json();
   if (!fileInfo.ok) throw new Error("Could not retrieve file info from Telegram.");
   
   const filePath = fileInfo.result.file_path;
   
-  // 2. Download Binary File
   const fileDownloadUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
   const fileRes = await fetch(fileDownloadUrl);
   const arrayBuffer = await fileRes.arrayBuffer();
   
-  // 3. Convert to Base64 for Gemini
   let binary = '';
   const bytes = new Uint8Array(arrayBuffer);
   const len = bytes.byteLength;
@@ -366,20 +384,19 @@ async function sendDeployInstructions(botToken, chatId) {
 
 *Step 1: Get API Keys*
 • Get a Telegram Token from @BotFather.
-• Get a Free Gemini Key from Google AI Studio.
+• Get up to 10 Free Gemini Keys from Google AI Studio.
 
 *Step 2: Setup Cloudflare*
-• Install Wrangler: \`npm i -g wrangler\`
+• Install Wrangler: \`npm i -g wrangler@latest\`
 • Create D1 Database: \`wrangler d1 create bot_db\`
-• Create a new folder, add this code to \`worker.js\`.
-• Setup \`wrangler.toml\` pointing to your worker and D1 DB binding.
-
-*Step 3: Deploy*
-• Add secrets: 
-  \`wrangler secret put TELEGRAM_BOT_TOKEN\`
-  \`wrangler secret put GEMINI_API_KEY\`
-  \`wrangler secret put ADMIN_CHAT_ID\`
+• Link Database: Copy the output \`database_id\` into the \`wrangler.toml\` file!
 • Deploy: \`wrangler deploy\`
+
+*Step 3: Add Cloudflare Secrets*
+Run these commands or add them via Cloudflare Dashboard Settings:
+  \`wrangler secret put TELEGRAM_BOT_TOKEN\`
+  \`wrangler secret put GEMINI_API_KEYS\` (Separate multiple keys with commas!)
+  \`wrangler secret put ADMIN_CHAT_ID\`
 
 *Step 4: Set Webhook*
 Open this URL in your browser, replacing \`<BOT_TOKEN>\` and \`<WORKER_URL>\`:
