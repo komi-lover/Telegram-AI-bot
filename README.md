@@ -18,7 +18,7 @@ How to clone and deploy this bot:
 *Step 3: Deploy*
 • Add secrets: 
   \`wrangler secret put TELEGRAM_BOT_TOKEN\`
-  \`wrangler secret put GEMINI_API_KEY\`
+  \`wrangler secret put GEMINI_API_KEYS\(each separated by comma ,)`
   \`wrangler secret put ADMIN_CHAT_ID\`
 • Deploy: \`wrangler deploy\`
 
